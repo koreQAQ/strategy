@@ -18,8 +18,6 @@ plotHiddenBull = input(title="Plot Hidden Bullish", defval=true)
 plotBear = input(title="Plot Bearish", defval=true)
 plotHiddenBear = input(title="Plot Hidden Bearish", defval=false)
 
-//useTrailStopLoss = input(false, title="Use Trailing Stop Loss")
-
 sl_type = input("NONE", title="Trailing StopLoss Type", options=['ATR','PERC', 'NONE'])
 
 stopLoss = input(title="Stop Loss%", defval=5, minval=1)

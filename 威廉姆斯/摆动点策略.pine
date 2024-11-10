@@ -1,0 +1,150 @@
+// This Pine Script™ code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © HailHydraQuan
+
+//@version=5
+strategy("威廉姆斯-短线交易",overlay=true)
+
+var start_ts            =   timestamp('2024-05-01T12:00:00+0800')
+cfg_start_time_enable   =   input.bool(false            ,''                 ,inline='start_time')
+cfg_start_time          =   input.time(start_ts         ,'开始时间'         ,inline='start_time')
+show_short_hl           =   input.bool(true             ,'显示短期高低点')
+show_long_hl            =   input.bool(true             ,'显示中期高低点')
+exclude_bar1            =   input.bool(false            ,'排除-内移日（孕线）'          ,tooltip = '内移日（孕线）最高价低于前一日的最高价，最低价高于前一日的最低价。')
+exclude_bar2            =   input.bool(false            ,'排除-外移日（抱线/吞没形态）' ,tooltip = '外移日（抱线/吞没形态）它有高于前一日的最高价，也有低于前一日的最低价')
+
+enable_momentum         =   input.bool(true            ,'启动前一日动能突破入场' ,tooltip = '当处于多头趋势时, 当前价格超过前一日K加上波幅时做多;当处于多头趋势时, 当前价格减去前一日K加上波幅时做多;')
+long_mul                =   input.float(0.5            ,'多头波动乘数' )
+short_mul               =   input.float(0.5            ,'空头波动乘数' )
+
+duration = high - low
+momentum_long = enable_momentum ? close > open + duration[1] * long_mul : true
+momentum_short = enable_momentum ? close < open  - duration[1] * short_mul: true
+
+
+start_cond=time >= cfg_start_time or not cfg_start_time_enable
+
+is_bar1=high[2]>high[1] and low[2]<low[1]   //内移日
+is_bar2=high[2]<high[1] and low[2]>low[1]   //外移日
+need_exclude_bar1_cond=exclude_bar1 and is_bar1
+need_exclude_bar2_cond=exclude_bar2 and is_bar2
+
+exclude_bar_cond=not (need_exclude_bar1_cond or need_exclude_bar2_cond)
+
+new_top=high<high[1] and high[1]>high[2] and exclude_bar_cond and start_cond
+
+new_bot=low>low[1] and low[1]<low[2] and exclude_bar_cond and start_cond
+
+plotshape(show_short_hl and new_top, style=shape.triangledown,color=color.new(color.red,0),  location=location.abovebar,size=size.small ,title='短期高点',offset = -1)
+plotshape(show_short_hl and new_bot, style=shape.triangleup,color=color.new(color.green,0),  location=location.belowbar,size=size.small,title='短期低点',offset = -1)
+
+
+
+// 短期高低点对象
+type short_hl_obj
+    int dir             //1高点  -1低点
+    chart.point left    //左
+    chart.point mid     //中
+    chart.point right   //右
+    int node_count=0
+    short_hl_obj pre
+
+// 长期高低点对象
+type long_hl_obj
+    int dir             //1高点  -1低点
+    short_hl_obj left    //左
+    short_hl_obj mid     //中
+    short_hl_obj right   //右
+    int node_count=0
+    long_hl_obj pre
+
+// 所有的短期高点
+var all_short_top=array.new<short_hl_obj>()
+// 所有的短期低点
+var all_short_bot=array.new<short_hl_obj>()
+// 所有的长期高点
+var all_long_top=array.new<long_hl_obj>()
+// 所有的长期低点
+var all_long_bot=array.new<long_hl_obj>()
+
+
+fun_process_new_short_hl()=>
+    if new_top
+        left =chart.point.new(time[2],bar_index[2],high[2])
+        mid  =chart.point.new(time[1],bar_index[1],high[1])
+        right=chart.point.new(time[0],bar_index[0],high[0])
+        all_short_top.unshift(short_hl_obj.new(1,left,mid,right))
+
+    if new_bot
+        left =chart.point.new(time[2],bar_index[2],low[2])
+        mid  =chart.point.new(time[1],bar_index[1],low[1])
+        right=chart.point.new(time[0],bar_index[0],low[0])
+        all_short_bot.unshift(short_hl_obj.new(-1,left,mid,right))
+
+
+fun_process_new_long_hl()=>
+    trigger_new_top=false
+    trigger_new_bot=false
+    // 中期高低点由短期高低点生成，所以，必须存在3个以上的短期高低点
+    if new_top and all_short_top.size()>=3
+        left=all_short_top.get(2)
+        mid=all_short_top.get(1)
+        right=all_short_top.get(0)
+        if mid.mid.price>left.mid.price and mid.mid.price>right.mid.price 
+            all_long_top.unshift(long_hl_obj.new(1,left,mid,right))
+            trigger_new_top:=true
+            if show_long_hl
+                label.new(mid.mid,style = label.style_label_down,color = color.red,yloc = yloc.abovebar,size=size.large)
+
+    if new_bot and all_short_bot.size()>=3
+        left=all_short_bot.get(2)
+        mid=all_short_bot.get(1)
+        right=all_short_bot.get(0)
+        if mid.mid.price<left.mid.price and mid.mid.price<right.mid.price  
+            all_long_bot.unshift(long_hl_obj.new(-1,left,mid,right))
+            trigger_new_bot:=true
+            if show_long_hl
+                label.new(mid.mid,style = label.style_label_up,color = color.green,yloc = yloc.belowbar,size=size.large)
+
+    [trigger_new_top,trigger_new_bot]
+
+fun_process_new_short_hl()
+[trigger_new_top,trigger_new_bot]=fun_process_new_long_hl()
+
+// - 中期低点抬高为多头趋势，且短期高点被突破时为入场K,做多，最近的一个短期低点为跟踪止损点
+// - 中期高点降低为空头趋势，且短期低点被突破时为入场K,做空，最近的一个短期高点为跟踪止损点
+
+
+ps=strategy.position_size
+var final_trend=0
+if trigger_new_top
+    final_trend:=0
+    if all_long_top.size()>=2
+        if all_long_top.get(0).mid.mid.price<all_long_top.get(1).mid.mid.price
+            final_trend:=-1
+if trigger_new_bot
+    final_trend:=0
+    if all_long_bot.size()>=2
+        if all_long_bot.get(0).mid.mid.price>all_long_bot.get(1).mid.mid.price
+            final_trend:=1
+
+bgcolor(final_trend==1?color.new(color.green,50):final_trend==-1?color.new(color.red,50):na,title = '中期方向',display = display.none)
+
+strategy.cancel_all()
+if all_long_bot.size()>=2 and all_short_top.size()>0 and ps==0
+    // 中期低点抬高为多头趋势
+    if final_trend==1 and momentum_long
+        strategy.entry('long',strategy.long,comment = '做多',stop = all_short_top.get(0).mid.price,oca_name = 'entry',oca_type = strategy.oca.cancel)
+        strategy.exit('exit long','long',stop=all_short_bot.get(0).mid.price,comment_loss = '多离场')
+
+if all_long_top.size()>=2 and all_short_bot.size()>0 and ps==0
+    // 中期高点降低为空头趋势
+    if final_trend==-1 and momentum_short
+        strategy.entry('short',strategy.short,comment = '做空',stop = all_short_bot.get(0).mid.price,oca_name = 'entry',oca_type = strategy.oca.cancel)
+        strategy.exit('exit short','short',stop=all_short_top.get(0).mid.price,comment_loss = '空离场')
+
+if ps!=0
+    stop=ps>0?all_short_bot.get(0).mid.price:all_short_top.get(0).mid.price
+    oid=ps>0?'long':'short'
+    tag=ps>0?'多':'空'
+    strategy.exit('exit '+oid,oid,stop=stop,comment_loss = tag+'离场')
+
